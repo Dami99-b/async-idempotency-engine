@@ -84,6 +84,10 @@ Copy the example environment file and adjust values:
 cp .env.example .env
 ```
 
+Set `REDIS_URL` to a full connection string (`redis://` or `rediss://`) when your
+provider hands you one, as Render and most managed hosts do. Leave it blank to fall
+back to the discrete `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` values.
+
 Start Redis:
 
 ```bash
@@ -172,6 +176,32 @@ idempotency_degraded_total 0.0
 idempotency_breaker_open 0.0
 idempotency_execution_seconds_bucket{endpoint="/api/v1/payments",outcome="acquired",le="0.5"} 35.0
 ```
+
+## Deploying to Render
+
+The repository ships a `render.yaml` blueprint that provisions both the web service
+and a managed Redis (Key Value) instance, wiring `REDIS_URL` between them automatically.
+
+1. In the Render dashboard choose **New → Blueprint** and point it at this repository.
+2. Render reads `render.yaml`, creates the web service plus the `idempotency-store`
+   Key Value instance, and injects its connection string as `REDIS_URL`.
+3. Confirm the deployment is fully operational, not degraded:
+
+```bash
+curl https://<your-service>.onrender.com/health
+```
+
+A healthy deployment reports `"redis_connected": true` and `"idempotency": "active"`.
+If it reports `"idempotency": "degraded"`, Redis is unreachable and the engine is
+passing every request through without deduplication.
+
+**Without Redis attached the service still starts and returns 200s, but idempotency
+is a silent no-op** — the circuit breaker degrades open by design. Always check
+`/health` after deploying rather than assuming a 200 on `/` means the engine is live.
+
+Note that Render's free Key Value plan has no persistence: cached responses are lost
+on restart, which widens the window for a duplicate charge after a redeploy. Use a
+paid plan with persistence for anything handling real money.
 
 ### Deployment Considerations
 

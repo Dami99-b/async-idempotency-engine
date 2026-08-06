@@ -55,19 +55,37 @@ class IdempotencyEngine:
         )
 
     async def connect(self):
-        self.redis_client = redis.Redis(
-            host=settings.redis_host,
-            port=settings.redis_port,
-            db=settings.redis_db,
-            password=settings.redis_password,
-            socket_timeout=settings.redis_timeout,
-            socket_connect_timeout=settings.redis_timeout,
-            decode_responses=True,
-        )
+        if settings.redis_url:
+            self.redis_client = redis.from_url(
+                settings.redis_url,
+                socket_timeout=settings.redis_timeout,
+                socket_connect_timeout=settings.redis_timeout,
+                decode_responses=True,
+            )
+        else:
+            self.redis_client = redis.Redis(
+                host=settings.redis_host,
+                port=settings.redis_port,
+                db=settings.redis_db,
+                password=settings.redis_password,
+                socket_timeout=settings.redis_timeout,
+                socket_connect_timeout=settings.redis_timeout,
+                decode_responses=True,
+            )
         try:
             await self.redis_client.ping()
         except TRANSIENT_ERRORS:
             pass
+
+    async def ping(self) -> bool:
+        """Report Redis reachability so a degraded deployment is visible, not silent."""
+        if self.redis_client is None:
+            return False
+        try:
+            await self.redis_client.ping()
+        except TRANSIENT_ERRORS:
+            return False
+        return True
 
     async def disconnect(self):
         if self.redis_client:

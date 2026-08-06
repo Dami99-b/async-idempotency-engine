@@ -40,7 +40,44 @@ async def client(mock_redis):
 async def test_health_endpoint(client):
     response = await client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "healthy"}
+    assert response.json() == {
+        "status": "healthy",
+        "redis_connected": True,
+        "idempotency": "active",
+    }
+
+
+@pytest.mark.asyncio
+async def test_health_reports_degraded_without_redis(client, mock_redis):
+    mock_redis.ping.side_effect = RedisConnectionError("Redis connection failed")
+
+    response = await client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "healthy",
+        "redis_connected": False,
+        "idempotency": "degraded",
+    }
+
+
+@pytest.mark.asyncio
+async def test_root_endpoint_describes_service(client):
+    response = await client.get("/")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["service"] == "Async Idempotency Engine"
+    assert data["redis_connected"] is True
+    assert data["endpoints"]["health"] == "/health"
+
+
+@pytest.mark.asyncio
+async def test_metrics_endpoint_served_without_redirect(client):
+    response = await client.get("/metrics")
+
+    assert response.status_code == 200
+    assert "idempotency_cache_hits_total" in response.text
 
 
 @pytest.mark.asyncio
