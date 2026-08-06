@@ -1,0 +1,188 @@
+# Async Idempotency Engine
+
+Production-grade idempotency handling for distributed systems built with FastAPI, Redis, and circuit-breaking resilience.
+
+## The Problem
+
+Modern distributed systems face the idempotency challenge: network failures, client retries, and load balancer replays can cause duplicate requests. Without idempotency, a single payment request might charge a customer twice, an order might be placed multiple times, or any state-changing operation could be unintentionally repeated.
+
+Traditional solutions are either too naive (database unique constraints that fail late) or too heavyweight (distributed transactions that kill throughput). This engine provides a pragmatic middle ground: atomic Redis-backed request deduplication with circuit-breaking fallback and zero false negatives.
+
+## Architecture & System Design
+
+### State Machine
+
+Every request flows through a three-state lifecycle:
+
+1. **New Request**: No prior execution. The engine acquires a distributed lock via Redis SETNX, stores the payload hash, and allows the operation to proceed.
+
+2. **In-Progress**: Another instance is currently processing this idempotency key. Return `409 Conflict` immediately—no queueing, no spinning.
+
+3. **Completed**: The operation finished. Return the cached response from Redis without re-executing.
+
+### Core Components
+
+**Decorator**: The `@idempotent` decorator wraps FastAPI route handlers. It extracts the `X-Idempotency-Key` header, computes a SHA-256 hash of the request payload, and coordinates with the engine.
+
+**Engine**: Manages Redis interactions through `pybreaker` circuit breakers. On Redis failure (network partition, instance crash), the breaker opens and requests pass through unprotected rather than failing hard.
+
+**Payload Hashing**: SHA-256 fingerprint of the JSON body. If the same idempotency key arrives with a different payload, the engine rejects it with `400 Bad Request`—this prevents malicious or accidental payload tampering.
+
+**TTL Strategy**: Locks expire after 5 minutes (configurable), completed responses after 24 hours. This bounds memory and handles crashed workers that never release locks.
+
+### Observability
+
+Prometheus metrics expose:
+- `idempotency_cache_hits_total`: Replayed responses served from cache
+- `idempotency_cache_misses_total`: Keys claimed for first-time execution
+- `idempotency_lock_conflicts_total`: Concurrent attempts blocked with 409
+- `idempotency_payload_mismatch_total`: Retries rejected for a changed payload
+- `idempotency_degraded_total`: Requests passed through while Redis was unreachable
+- `idempotency_execution_seconds`: Latency histogram, labelled by endpoint and outcome
+- `idempotency_breaker_open`: 1 while the Redis circuit breaker is open
+
+Scrape `/metrics` for real-time idempotency behavior.
+
+## Tech Stack
+
+- **FastAPI**: Async request handling, dependency injection, automatic OpenAPI docs
+- **Redis**: Atomic SETNX primitive for distributed locking, sub-millisecond reads
+- **Pydantic v2**: Request validation and settings management
+- **Custom async circuit breaker** (`app/idempotency/breaker.py`): Degrades gracefully under Redis failure
+- **prometheus_client**: Metrics export for observability
+- **pytest + httpx**: Async test suite with mocked Redis
+
+### A note on the circuit breaker
+
+The original design called for `pybreaker`. Its `call_async` method is implemented
+with `@gen.coroutine` from **Tornado**, and silently no-ops unless Tornado is installed
+(`HAS_TORNADO_SUPPORT`). Pulling a second web framework into an asyncio service to get
+a decorator is a poor trade, so the breaker here is a ~45-line asyncio-native
+implementation with the same closed/open/half-open semantics. Swapping it back is a
+one-line change in `IdempotencyEngine.__init__` if Tornado is acceptable in your stack.
+
+## Local Setup
+
+### Prerequisites
+
+- Python 3.11+
+- Redis 6.2+ running locally or accessible via network
+
+### Installation
+
+```bash
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+### Configuration
+
+Copy the example environment file and adjust values:
+
+```bash
+cp .env.example .env
+```
+
+Start Redis:
+
+```bash
+redis-server
+```
+
+Or use Docker:
+
+```bash
+docker run -d -p 6379:6379 redis:7-alpine
+```
+
+### Run the Server
+
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+The API will be available at `http://localhost:8000`.
+
+Interactive docs: `http://localhost:8000/docs`
+
+### Testing
+
+Run the test suite:
+
+```bash
+pytest tests/ -v
+```
+
+### Example Usage
+
+**First request** (executes and caches):
+
+```bash
+curl -X POST http://localhost:8000/api/v1/payments \
+  -H "Content-Type: application/json" \
+  -H "X-Idempotency-Key: payment-20260806-001" \
+  -d '{"user_id": "user123", "amount": 100.0, "currency": "USD"}'
+```
+
+**Retry with same key** (returns cached response):
+
+```bash
+curl -X POST http://localhost:8000/api/v1/payments \
+  -H "Content-Type: application/json" \
+  -H "X-Idempotency-Key: payment-20260806-001" \
+  -d '{"user_id": "user123", "amount": 100.0, "currency": "USD"}'
+```
+
+**Concurrent duplicate** (while first is running):
+
+```bash
+HTTP/1.1 409 Conflict
+{"detail": "Request already in progress"}
+```
+
+**Tampered retry** (same key, different payload):
+
+```bash
+curl -X POST http://localhost:8000/api/v1/payments \
+  -H "Content-Type: application/json" \
+  -H "X-Idempotency-Key: payment-20260806-001" \
+  -d '{"user_id": "user123", "amount": 200.0, "currency": "USD"}'
+
+HTTP/1.1 400 Bad Request
+{"detail": "Payload mismatch for idempotency key"}
+```
+
+### Metrics
+
+Scrape Prometheus metrics:
+
+```bash
+curl http://localhost:8000/metrics
+```
+
+Sample output:
+
+```
+idempotency_cache_hits_total 142.0
+idempotency_cache_misses_total 38.0
+idempotency_lock_conflicts_total 5.0
+idempotency_payload_mismatch_total 2.0
+idempotency_degraded_total 0.0
+idempotency_breaker_open 0.0
+idempotency_execution_seconds_bucket{endpoint="/api/v1/payments",outcome="acquired",le="0.5"} 35.0
+```
+
+### Deployment Considerations
+
+- Set `IDEMPOTENCY_TTL` based on your retry window (default 24h)
+- Tune `CIRCUIT_BREAKER_FAIL_MAX` and `CIRCUIT_BREAKER_TIMEOUT` for your Redis reliability
+- Use Redis Cluster or Sentinel for HA
+- Run multiple FastAPI workers behind a load balancer
+- Monitor the `lock_conflicts` metric—sustained high values indicate clients aren't respecting 409s
+
+![System Architecture](docs/architecture-diagram.png)
+
+![409 Conflict Demo](docs/conflict-demo.png)
+
+![Prometheus Dashboard](docs/prometheus-dashboard.png)
