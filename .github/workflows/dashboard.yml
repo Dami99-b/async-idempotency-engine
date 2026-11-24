@@ -1,0 +1,67 @@
+name: Grafana dashboard snapshot
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "monitoring/**"
+      - "docker-compose.yml"
+      - ".github/workflows/dashboard.yml"
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start API, Redis, Prometheus and Grafana
+        run: |
+          docker compose up --build -d
+          for i in $(seq 1 60); do
+            curl -sf localhost:3000/api/health && curl -sf localhost:8000/health && break
+            sleep 2
+          done
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install load generator and browser
+        run: |
+          pip install httpx playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Generate traffic with a Redis outage in the middle
+        run: |
+          python scripts/load.py --seconds 200 > load.txt &
+          sleep 90
+          docker compose stop redis
+          sleep 35
+          docker compose start redis
+          wait
+          cat load.txt
+
+      - name: Screenshot the dashboard
+        run: |
+          sleep 10
+          python - <<'PY'
+          from playwright.sync_api import sync_playwright
+          with sync_playwright() as p:
+              b = p.chromium.launch()
+              page = b.new_page(viewport={"width": 1600, "height": 1000}, device_scale_factor=2)
+              page.goto("http://localhost:3000/d/idempotency?orgId=1&from=now-5m&to=now&kiosk&theme=dark")
+              page.wait_for_timeout(8000)
+              page.screenshot(path="grafana-dashboard.png", full_page=True)
+              b.close()
+          PY
+          curl -s localhost:9090/api/v1/query --data-urlencode 'query=sum(idempotency_lock_conflicts_total)' > summary.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: grafana-dashboard
+          path: |
+            grafana-dashboard.png
+            load.txt
+            summary.json
