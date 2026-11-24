@@ -9,6 +9,9 @@ on:
       - "docker-compose.yml"
       - ".github/workflows/dashboard.yml"
 
+permissions:
+  contents: write
+
 jobs:
   snapshot:
     runs-on: ubuntu-latest
@@ -58,10 +61,11 @@ jobs:
           PY
           curl -s localhost:9090/api/v1/query --data-urlencode 'query=sum(idempotency_lock_conflicts_total)' > summary.json
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: grafana-dashboard
-          path: |
-            grafana-dashboard.png
-            load.txt
-            summary.json
+      - name: Save screenshot to docs/
+        run: |
+          mv grafana-dashboard.png docs/grafana-dashboard.png
+          git config user.name "Prosper Okah"
+          git config user.email "prosperoluwadamilare@gmail.com"
+          git add docs/grafana-dashboard.png
+          git commit -m "Update Grafana dashboard screenshot" || exit 0
+          git push
