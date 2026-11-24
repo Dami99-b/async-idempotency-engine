@@ -10,6 +10,8 @@ Traditional solutions are either too naive (database unique constraints that fai
 
 ## Architecture & System Design
 
+![System architecture](docs/architecture-diagram.png)
+
 ### State Machine
 
 Every request flows through a three-state lifecycle:
@@ -19,6 +21,12 @@ Every request flows through a three-state lifecycle:
 2. **In-Progress**: Another instance is currently processing this idempotency key. Return `409 Conflict` immediately—no queueing, no spinning.
 
 3. **Completed**: The operation finished. Return the cached response from Redis without re-executing.
+
+### What it looks like
+
+Real output from a local run (Redis 7, one Uvicorn worker):
+
+![Duplicate requests: one 200, one 409, a replayed 200 and a 400 for a changed payload](docs/conflict-demo.png)
 
 ### Core Components
 
@@ -41,7 +49,16 @@ Prometheus metrics expose:
 - `idempotency_execution_seconds`: Latency histogram, labelled by endpoint and outcome
 - `idempotency_breaker_open`: 1 while the Redis circuit breaker is open
 
-Scrape `/metrics` for real-time idempotency behavior.
+Scrape `/metrics` for real-time idempotency behavior. After the demo above:
+
+```text
+idempotency_cache_hits_total 1.0
+idempotency_cache_misses_total 1.0
+idempotency_lock_conflicts_total 1.0
+idempotency_payload_mismatch_total 1.0
+idempotency_degraded_total 0.0
+idempotency_breaker_open 0.0
+```
 
 ## Tech Stack
 
@@ -210,9 +227,3 @@ paid plan with persistence for anything handling real money.
 - Use Redis Cluster or Sentinel for HA
 - Run multiple FastAPI workers behind a load balancer
 - Monitor the `lock_conflicts` metric—sustained high values indicate clients aren't respecting 409s
-
-![System Architecture](docs/architecture-diagram.png)
-
-![409 Conflict Demo](docs/conflict-demo.png)
-
-![Prometheus Dashboard](docs/prometheus-dashboard.png)
