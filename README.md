@@ -60,6 +60,34 @@ idempotency_degraded_total 0.0
 idempotency_breaker_open 0.0
 ```
 
+## Monitoring with Prometheus and Grafana
+
+The repo ships a full monitoring stack: Prometheus scrapes `/metrics` every 5 seconds and Grafana loads a ready-made dashboard on startup.
+
+```bash
+docker compose up --build -d                       # API, Redis, Prometheus, Grafana
+pip install httpx
+python scripts/load.py --seconds 120               # mixed traffic: duplicates, retries, changed payloads
+```
+
+Open http://localhost:3000. The **Async Idempotency Engine** dashboard opens as the home page (no login needed locally).
+
+| Panel | What it tells you |
+|---|---|
+| Requests / s, Replay ratio | Throughput and how much traffic is answered from the cache |
+| 409 conflicts, Payload mismatches | Duplicates and changed payloads the engine blocked |
+| Degraded, Redis circuit breaker | Whether Redis is down and idempotency is switched off |
+| Requests by outcome | First executions, replays, 409s, 400s and degraded requests over time |
+| Handler latency | p50 / p95 / p99 of first executions, overall and per endpoint |
+| Protection events / s | Rate of 409s, 400s and degraded requests |
+
+To watch the circuit breaker trip, stop Redis while the load script runs:
+
+```bash
+docker compose stop redis      # breaker goes OPEN, Degraded starts climbing
+docker compose start redis     # breaker closes again after the timeout
+```
+
 ## Tech Stack
 
 - **FastAPI**: Async request handling, dependency injection, automatic OpenAPI docs
@@ -68,6 +96,7 @@ idempotency_breaker_open 0.0
 - **Custom async circuit breaker** (`app/idempotency/breaker.py`): Degrades gracefully under Redis failure
 - **prometheus_client**: Metrics export for observability
 - **pytest + httpx**: Async test suite with mocked Redis
+- **Grafana**: Provisioned dashboard for request outcomes, latency and breaker state
 
 ### A note on the circuit breaker
 
