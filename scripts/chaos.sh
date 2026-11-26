@@ -14,10 +14,12 @@ RESULTS=${RESULTS_FILE:-chaos-results.txt}
 
 annotate() {
   [ -n "${GRAFANA_ADMIN_PASSWORD:-}" ] || return 0
-  curl -s -o /dev/null -u "admin:${GRAFANA_ADMIN_PASSWORD}" \
+  local code
+  code=$(curl -s -o /tmp/annotation.json -w "%{http_code}" -u "admin:${GRAFANA_ADMIN_PASSWORD}" \
     -H 'Content-Type: application/json' \
     -d "{\"dashboardUID\":\"idempotency\",\"time\":$(date +%s%3N),\"text\":\"$1\",\"tags\":[\"chaos\"]}" \
-    "$GRAFANA/api/annotations" || true
+    "$GRAFANA/api/annotations" || true)
+  echo "annotation '$1': HTTP $code $(head -c 200 /tmp/annotation.json 2>/dev/null)" >> "${ANNOTATION_LOG:-annotations.log}"
 }
 
 start_load() {

@@ -16,6 +16,19 @@ from collections import Counter
 
 import httpx
 
+# A connection dropped mid-request (for example by a pod shutting down) is
+# retried once with the SAME idempotency key. That is exactly the situation
+# the engine exists for: the retry can never cause a second charge.
+DROPPED = (httpx.RemoteProtocolError, httpx.ReadError, httpx.ConnectError)
+
+
+async def post(client: httpx.AsyncClient, url: str, body: dict, headers: dict, stats: Counter) -> httpx.Response:
+    try:
+        return await client.post(url, json=body, headers=headers)
+    except DROPPED:
+        stats["retried"] += 1
+        return await client.post(url, json=body, headers=headers)
+
 
 async def round_trip(client: httpx.AsyncClient, base: str, stats: Counter) -> None:
     key = str(uuid.uuid4())
@@ -24,18 +37,18 @@ async def round_trip(client: httpx.AsyncClient, base: str, stats: Counter) -> No
     headers = {"X-Idempotency-Key": key}
 
     burst = await asyncio.gather(
-        *(client.post(url, json=body, headers=headers) for _ in range(random.randint(2, 6)))
+        *(post(client, url, body, headers, stats) for _ in range(random.randint(2, 6)))
     )
     for r in burst:
         stats[r.status_code] += 1
 
     await asyncio.sleep(0.6)
     for _ in range(random.randint(1, 4)):
-        stats[(await client.post(url, json=body, headers=headers)).status_code] += 1
+        stats[(await post(client, url, body, headers, stats)).status_code] += 1
 
     if random.random() < 0.15:
         changed = {**body, "amount": body["amount"] + 1}
-        stats[(await client.post(url, json=changed, headers=headers)).status_code] += 1
+        stats[(await post(client, url, changed, headers, stats)).status_code] += 1
 
 
 async def main() -> None:
