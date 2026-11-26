@@ -92,6 +92,31 @@ docker compose stop redis      # breaker goes OPEN, Degraded starts climbing
 docker compose start redis     # breaker closes again after the timeout
 ```
 
+## Kubernetes deployment (Terraform + Ansible)
+
+`deploy/` runs the engine on a local multi-node Kubernetes cluster:
+
+- **Terraform** (`deploy/terraform`) creates a kind cluster with one control-plane node and two workers, and maps the API's NodePort to `localhost:8080`.
+- **Ansible** (`deploy/ansible`) builds the image, loads it into the nodes, renders the Kubernetes manifests from Jinja2 templates, waits for the rollout and smoke-tests the API: first request 200, retry replayed from cache, changed payload 400.
+- **Kubernetes**: Redis plus 3 API replicas spread across nodes, readiness and liveness probes on `/health`, a `preStop` drain so terminating pods stop receiving traffic before shutdown, a rolling update (`maxUnavailable: 0`) and a PodDisruptionBudget keeping at least 2 replicas up.
+
+```bash
+make up      # terraform apply + ansible-playbook
+make load    # mixed traffic against http://localhost:8080
+make down    # terraform destroy
+```
+
+Requires Docker, kind, kubectl, Terraform, and `pip install ansible-core kubernetes` plus `ansible-galaxy collection install kubernetes.core`.
+
+The `Kubernetes deploy` GitHub Actions workflow runs all of this on every change, then tests resilience under load (10 concurrent clients, 60 s each):
+
+| Scenario | 200 | 409 | 400 | Failed requests |
+|---|---|---|---|---|
+| One API pod deleted mid-run | 2,343 | 1,991 | 98 | 0 |
+| Rolling restart of all replicas | 2,288 | 1,907 | 122 | 0 |
+
+409s are concurrent duplicates and 400s are deliberately changed payloads from the load script, so both are expected. The client retries a failed connection once, as a real client would.
+
 ## Tech Stack
 
 - **FastAPI**: Async request handling, dependency injection, automatic OpenAPI docs
@@ -101,6 +126,7 @@ docker compose start redis     # breaker closes again after the timeout
 - **prometheus_client**: Metrics export for observability
 - **pytest + httpx**: Async test suite with mocked Redis
 - **Grafana**: Provisioned dashboard for request outcomes, latency and breaker state
+- **Terraform, Ansible, Kubernetes (kind)**: Infrastructure as code, templated deployment and multi-replica runtime
 
 ### A note on the circuit breaker
 
