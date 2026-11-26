@@ -8,6 +8,18 @@ api_replicas: 3
 api_node_port: 30080
 api_url: http://localhost:8080
 
+prometheus_version: v2.55.1
+prometheus_node_port: 30090
+prometheus_url: http://localhost:9090
+scrape_interval: 5s
+
+grafana_version: 11.3.0
+grafana_node_port: 30300
+grafana_url: http://localhost:3000
+# Read from the environment so the password never lives in the repo.
+grafana_admin_password: "{{ lookup('ansible.builtin.env', 'GRAFANA_ADMIN_PASSWORD') | default('change-me-locally', true) }}"
+monitoring_dir: "{{ repo_root }}/monitoring/grafana"
+
 idempotency_ttl: 86400
 lock_ttl: 300
 breaker_fail_max: 5

@@ -6,6 +6,6 @@ output "kubeconfig_path" {
   value = kind_cluster.this.kubeconfig_path
 }
 
-output "api_url" {
-  value = "http://localhost:${var.api_host_port}"
+output "urls" {
+  value = { for name, m in var.port_mappings : name => "http://localhost:${m.host_port}" }
 }

@@ -10,14 +10,15 @@ variable "worker_count" {
   default     = 2
 }
 
-variable "api_node_port" {
-  description = "NodePort the API Service listens on inside the cluster"
-  type        = number
-  default     = 30080
-}
-
-variable "api_host_port" {
-  description = "Port on the host that forwards to the API NodePort"
-  type        = number
-  default     = 8080
+variable "port_mappings" {
+  description = "NodePorts exposed on localhost, keyed by service"
+  type = map(object({
+    node_port = number
+    host_port = number
+  }))
+  default = {
+    api        = { node_port = 30080, host_port = 8080 }
+    grafana    = { node_port = 30300, host_port = 3000 }
+    prometheus = { node_port = 30090, host_port = 9090 }
+  }
 }

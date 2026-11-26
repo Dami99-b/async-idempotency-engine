@@ -12,8 +12,8 @@ terraform {
 provider "kind" {}
 
 # Local Kubernetes cluster: one control-plane node and two workers.
-# The API's NodePort is mapped to localhost so the service is reachable
-# from the host without port-forwarding.
+# The NodePorts for the API, Grafana and Prometheus are mapped to localhost
+# so they are reachable from the host without port-forwarding.
 resource "kind_cluster" "this" {
   name           = var.cluster_name
   wait_for_ready = true
@@ -25,9 +25,12 @@ resource "kind_cluster" "this" {
     node {
       role = "control-plane"
 
-      extra_port_mappings {
-        container_port = var.api_node_port
-        host_port      = var.api_host_port
+      dynamic "extra_port_mappings" {
+        for_each = var.port_mappings
+        content {
+          container_port = extra_port_mappings.value.node_port
+          host_port      = extra_port_mappings.value.host_port
+        }
       }
     }
 

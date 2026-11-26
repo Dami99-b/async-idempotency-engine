@@ -1,0 +1,131 @@
+name: CI
+
+# One pipeline for everything: unit tests, then a full Kubernetes deployment
+# (Terraform + Ansible) with Prometheus and Grafana, resilience scenarios
+# under load, and a dashboard screenshot.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: pytest -q
+
+  kubernetes:
+    name: Kubernetes deploy and resilience
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      TF_IN_AUTOMATION: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Ansible, kind, the load generator and a headless browser
+        run: |
+          pip install ansible-core kubernetes httpx playwright
+          ansible-galaxy collection install kubernetes.core
+          python -m playwright install --with-deps chromium
+          if ! command -v kind >/dev/null; then
+            curl -sSLo kind https://kind.sigs.k8s.io/dl/v0.24.0/kind-linux-amd64
+            chmod +x kind && sudo mv kind /usr/local/bin/kind
+          fi
+          kind version && kubectl version --client && terraform version
+
+      - name: Generate a Grafana admin password for this run
+        run: |
+          PW=$(openssl rand -hex 16)
+          echo "::add-mask::$PW"
+          echo "GRAFANA_ADMIN_PASSWORD=$PW" >> "$GITHUB_ENV"
+
+      - name: Terraform fmt and validate
+        working-directory: deploy/terraform
+        run: |
+          terraform fmt -check -recursive
+          terraform init -input=false
+          terraform validate
+
+      - name: Terraform apply (create the kind cluster)
+        working-directory: deploy/terraform
+        run: terraform apply -auto-approve -input=false
+
+      - name: Point kubectl at the new cluster
+        run: echo "KUBECONFIG=$(terraform -chdir=deploy/terraform output -raw kubeconfig_path)" >> "$GITHUB_ENV"
+
+      - name: Ansible deploy and smoke test
+        working-directory: deploy/ansible
+        run: ansible-playbook site.yml
+
+      - name: Cluster state
+        run: |
+          kubectl get nodes -o wide
+          kubectl -n idempotency get deploy,pods,svc,pdb -o wide
+          NODES=$(kubectl get nodes --no-headers | wc -l)
+          SPREAD=$(kubectl -n idempotency get pods -l app=api -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}' | sort -u | wc -l)
+          echo "::notice title=Cluster::$NODES nodes; 3 API replicas across $SPREAD nodes; Prometheus and Grafana running"
+
+      - name: Resilience scenarios under load
+        run: |
+          scripts/chaos.sh all
+          while read -r line; do echo "::notice title=Resilience::$line"; done < chaos-results.txt
+
+      - name: Screenshot the Grafana dashboard
+        run: |
+          sleep 15
+          python - <<'PY'
+          from playwright.sync_api import sync_playwright
+          with sync_playwright() as p:
+              browser = p.chromium.launch()
+              page = browser.new_page(viewport={"width": 1600, "height": 1000}, device_scale_factor=2)
+              page.goto("http://localhost:3000/d/idempotency?orgId=1&from=now-6m&to=now&kiosk&theme=dark")
+              page.wait_for_timeout(10000)
+              page.screenshot(path="/tmp/grafana-kubernetes.png", full_page=True)
+              browser.close()
+          PY
+
+      - name: Save the screenshot to docs/
+        if: github.event_name != 'pull_request'
+        run: |
+          if git ls-files --error-unmatch docs/grafana-kubernetes.png >/dev/null 2>&1 \
+             && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            echo "Screenshot already in the repo; run this workflow manually to refresh it."
+            exit 0
+          fi
+          cp /tmp/grafana-kubernetes.png docs/grafana-kubernetes.png
+          git config user.name "Prosper Okah"
+          git config user.email "prosperoluwadamilare@gmail.com"
+          git add docs/grafana-kubernetes.png
+          git commit -m "Update Grafana dashboard screenshot from the Kubernetes run" || exit 0
+          git pull --rebase -q origin main
+          git push origin HEAD:main
+
+      - name: Terraform destroy
+        if: always()
+        working-directory: deploy/terraform
+        run: terraform destroy -auto-approve -input=false
