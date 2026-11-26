@@ -38,3 +38,10 @@ htmlcov/
 *.swp
 *.swo
 *~
+
+# Terraform
+deploy/terraform/.terraform/
+deploy/terraform/*.tfstate*
+deploy/terraform/.terraform.lock.hcl
+deploy/terraform/*-config
+.benchmarks/

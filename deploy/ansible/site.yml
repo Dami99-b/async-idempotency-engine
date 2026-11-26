@@ -1,0 +1,79 @@
+# Build the API image, load it into the kind cluster created by Terraform,
+# deploy Redis and the API, then smoke-test idempotency end to end.
+#
+#   cd deploy/ansible && ansible-playbook site.yml
+
+- name: Deploy the idempotency engine to Kubernetes
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Build the API image
+      ansible.builtin.command:
+        cmd: docker build -t {{ image }} {{ repo_root }}
+      changed_when: true
+
+    - name: Load the image into the kind nodes
+      ansible.builtin.command:
+        cmd: kind load docker-image {{ image }} --name {{ cluster_name }}
+      changed_when: true
+
+    - name: Apply manifests
+      kubernetes.core.k8s:
+        state: present
+        apply: true
+        definition: "{{ lookup('ansible.builtin.template', item + '.yaml.j2') | ansible.builtin.from_yaml_all | list }}"
+      loop: [namespace, redis, api]
+
+    - name: Wait for Redis and the API to roll out
+      ansible.builtin.command:
+        cmd: kubectl -n {{ namespace }} rollout status deployment/{{ item }} --timeout=180s
+      loop: [redis, api]
+      changed_when: false
+
+    - name: Wait until the API answers through the NodePort
+      ansible.builtin.uri:
+        url: "{{ api_url }}/health"
+        return_content: true
+      register: health
+      until: health.status == 200 and health.json.redis_connected
+      retries: 30
+      delay: 2
+
+    - name: Pick a fresh idempotency key for the smoke test
+      ansible.builtin.set_fact:
+        smoke_key: "smoke-{{ image_tag }}-{{ 999999 | random }}"
+
+    - name: Smoke test, first request runs the handler
+      ansible.builtin.uri:
+        url: "{{ api_url }}/api/v1/payments"
+        method: POST
+        body_format: json
+        body: {user_id: smoke, amount: 5000, currency: NGN}
+        headers: {X-Idempotency-Key: "{{ smoke_key }}"}
+        status_code: 200
+      register: first
+
+    - name: Smoke test, retry with the same key is replayed from the cache
+      ansible.builtin.uri:
+        url: "{{ api_url }}/api/v1/payments"
+        method: POST
+        body_format: json
+        body: {user_id: smoke, amount: 5000, currency: NGN}
+        headers: {X-Idempotency-Key: "{{ smoke_key }}"}
+        status_code: 200
+      register: replay
+      failed_when: replay.idempotent_replay | default('') != 'true' or replay.json != first.json
+
+    - name: Smoke test, same key with a different amount is rejected
+      ansible.builtin.uri:
+        url: "{{ api_url }}/api/v1/payments"
+        method: POST
+        body_format: json
+        body: {user_id: smoke, amount: 9000, currency: NGN}
+        headers: {X-Idempotency-Key: "{{ smoke_key }}"}
+        status_code: 400
+
+    - name: Show where the API is running
+      ansible.builtin.debug:
+        msg: "API is live at {{ api_url }} ({{ api_replicas }} replicas, image {{ image }})"

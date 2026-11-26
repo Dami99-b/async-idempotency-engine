@@ -48,14 +48,18 @@ async def main() -> None:
     stats: Counter = Counter()
     deadline = time.monotonic() + args.seconds
 
-    async with httpx.AsyncClient(timeout=10) as client:
+    transport = httpx.AsyncHTTPTransport(retries=1)
+    async with httpx.AsyncClient(timeout=10, transport=transport) as client:
         async def worker() -> None:
             while time.monotonic() < deadline:
-                await round_trip(client, args.base, stats)
+                try:
+                    await round_trip(client, args.base, stats)
+                except httpx.HTTPError as exc:
+                    stats[type(exc).__name__] += 1
 
         await asyncio.gather(*(worker() for _ in range(args.concurrency)))
 
-    print("status codes:", dict(sorted(stats.items())))
+    print("results:", dict(sorted(stats.items(), key=lambda kv: str(kv[0]))))
 
 
 if __name__ == "__main__":

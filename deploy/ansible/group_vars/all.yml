@@ -1,0 +1,16 @@
+cluster_name: idempotency
+namespace: idempotency
+image_name: idempotency-api
+image_tag: "{{ lookup('pipe', 'git rev-parse --short HEAD') }}"
+image: "{{ image_name }}:{{ image_tag }}"
+
+api_replicas: 3
+api_node_port: 30080
+api_url: http://localhost:8080
+
+idempotency_ttl: 86400
+lock_ttl: 300
+breaker_fail_max: 5
+breaker_timeout: 10
+
+repo_root: "{{ playbook_dir }}/../.."
