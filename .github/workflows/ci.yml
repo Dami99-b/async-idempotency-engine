@@ -102,12 +102,19 @@ jobs:
         run: |
           sleep 15
           python - <<'PY'
+          import base64, os
           from playwright.sync_api import sync_playwright
+          token = base64.b64encode(f"admin:{os.environ['GRAFANA_ADMIN_PASSWORD']}".encode()).decode()
           with sync_playwright() as p:
               browser = p.chromium.launch()
-              page = browser.new_page(viewport={"width": 1600, "height": 1000}, device_scale_factor=2)
+              context = browser.new_context(
+                  viewport={"width": 1600, "height": 1000},
+                  device_scale_factor=2,
+                  extra_http_headers={"Authorization": f"Basic {token}"},
+              )
+              page = context.new_page()
               page.goto("http://localhost:3000/d/idempotency?orgId=1&from=now-6m&to=now&kiosk&theme=dark")
-              page.wait_for_timeout(10000)
+              page.wait_for_timeout(15000)
               page.screenshot(path="/tmp/grafana-kubernetes.png", full_page=True)
               browser.close()
           PY
