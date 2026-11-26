@@ -142,7 +142,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "increase(idempotency_lock_conflicts_total[5m])",
+          "expr": "sum(increase(idempotency_lock_conflicts_total[5m]))",
           "legendFormat": ""
         }
       ],
@@ -199,7 +199,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "increase(idempotency_payload_mismatch_total[5m])",
+          "expr": "sum(increase(idempotency_payload_mismatch_total[5m]))",
           "legendFormat": ""
         }
       ],
@@ -256,7 +256,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "increase(idempotency_degraded_total[5m])",
+          "expr": "sum(increase(idempotency_degraded_total[5m]))",
           "legendFormat": ""
         }
       ],
@@ -382,7 +382,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(idempotency_cache_misses_total[1m])",
+          "expr": "sum(rate(idempotency_cache_misses_total[1m]))",
           "legendFormat": "first execution (200)"
         },
         {
@@ -391,7 +391,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(idempotency_cache_hits_total[1m])",
+          "expr": "sum(rate(idempotency_cache_hits_total[1m]))",
           "legendFormat": "cached replay (200)"
         },
         {
@@ -400,7 +400,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(idempotency_lock_conflicts_total[1m])",
+          "expr": "sum(rate(idempotency_lock_conflicts_total[1m]))",
           "legendFormat": "in progress (409)"
         },
         {
@@ -409,7 +409,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(idempotency_payload_mismatch_total[1m])",
+          "expr": "sum(rate(idempotency_payload_mismatch_total[1m]))",
           "legendFormat": "payload mismatch (400)"
         },
         {
@@ -418,7 +418,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(idempotency_degraded_total[1m])",
+          "expr": "sum(rate(idempotency_degraded_total[1m]))",
           "legendFormat": "degraded (Redis down)"
         }
       ],
@@ -586,7 +586,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(idempotency_lock_conflicts_total[1m])",
+          "expr": "sum(rate(idempotency_lock_conflicts_total[1m]))",
           "legendFormat": "409 conflicts"
         },
         {
@@ -595,7 +595,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(idempotency_payload_mismatch_total[1m])",
+          "expr": "sum(rate(idempotency_payload_mismatch_total[1m]))",
           "legendFormat": "400 mismatches"
         },
         {
@@ -604,7 +604,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(idempotency_degraded_total[1m])",
+          "expr": "sum(rate(idempotency_degraded_total[1m]))",
           "legendFormat": "degraded"
         }
       ],

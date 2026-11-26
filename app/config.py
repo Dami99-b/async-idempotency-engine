@@ -9,7 +9,9 @@ class Settings(BaseSettings):
     redis_port: int = 6379
     redis_db: int = 0
     redis_password: str | None = None
-    redis_timeout: float = 2.0
+    redis_timeout: float = 1.0
+    redis_connect_timeout: float = 0.5
+    redis_retries: int = 1
 
     idempotency_ttl: int = 86400
     idempotency_lock_ttl: int = 300

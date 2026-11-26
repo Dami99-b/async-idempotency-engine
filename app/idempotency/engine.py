@@ -7,6 +7,8 @@ from typing import Any
 
 import redis.asyncio as redis
 from prometheus_client import Counter, Gauge, Histogram
+from redis.asyncio.retry import Retry
+from redis.backoff import NoBackoff
 from redis.exceptions import RedisError
 
 from app.config import settings
@@ -55,22 +57,24 @@ class IdempotencyEngine:
         )
 
     async def connect(self):
+        # Fail fast and let the circuit breaker handle outages. redis-py's
+        # default retry policy (many retries with exponential backoff) would
+        # hold every request open for seconds while Redis is down.
+        options = dict(
+            socket_timeout=settings.redis_timeout,
+            socket_connect_timeout=settings.redis_connect_timeout,
+            retry=Retry(NoBackoff(), settings.redis_retries),
+            decode_responses=True,
+        )
         if settings.redis_url:
-            self.redis_client = redis.from_url(
-                settings.redis_url,
-                socket_timeout=settings.redis_timeout,
-                socket_connect_timeout=settings.redis_timeout,
-                decode_responses=True,
-            )
+            self.redis_client = redis.from_url(settings.redis_url, **options)
         else:
             self.redis_client = redis.Redis(
                 host=settings.redis_host,
                 port=settings.redis_port,
                 db=settings.redis_db,
                 password=settings.redis_password,
-                socket_timeout=settings.redis_timeout,
-                socket_connect_timeout=settings.redis_timeout,
-                decode_responses=True,
+                **options,
             )
         try:
             await self.redis_client.ping()
@@ -82,7 +86,7 @@ class IdempotencyEngine:
         if self.redis_client is None:
             return False
         try:
-            await self.redis_client.ping()
+            await asyncio.wait_for(self.redis_client.ping(), timeout=settings.redis_connect_timeout)
         except TRANSIENT_ERRORS:
             return False
         return True

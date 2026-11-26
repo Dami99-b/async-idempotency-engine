@@ -46,6 +46,14 @@ async def root():
     }
 
 
+@app.get("/livez")
+async def livez():
+    """Process liveness only. Deliberately ignores Redis: the API keeps serving
+    in degraded mode when Redis is down, so a Redis outage must not make
+    Kubernetes restart or unroute the pods."""
+    return {"status": "alive"}
+
+
 @app.get("/health")
 async def health():
     redis_up = await engine.ping()
